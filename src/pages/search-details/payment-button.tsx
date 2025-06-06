@@ -1,23 +1,19 @@
-import React, { useEffect, useState } from "react";
+import React, { useState, useEffect } from "react";
 import RazorpayScriptLoader from "./razorpay-script-loader";
 import { useNavigate } from "react-router-dom";
+import Popup from "@/components/ui/popup";
 
 const PaymentButton: React.FC = () => {
   const navigate = useNavigate();
 
   const [paymentData, setPaymentData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
-  const [scriptLoaded, setScriptLoaded] = useState(false); // Track Razorpay script load status
+  const [scriptLoaded, setScriptLoaded] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [showPopup, setShowPopup] = useState(false);
 
   const BASE_URL = import.meta.env.VITE_DRIVADO_API;
   const apiKey = import.meta.env.VITE_DRIVADO_KEY;
-
-  const customerName =
-    (localStorage.getItem("firstName") || "") +
-    " " +
-    (localStorage.getItem("lastName") || "");
-  const customerEmail = localStorage.getItem("email") || "";
-  const customerContactNumber = localStorage.getItem("contactNumber") || "";
 
   const selectedVehicleString = localStorage.getItem("selectedVehicle");
   let amount = 0;
@@ -71,16 +67,16 @@ const PaymentButton: React.FC = () => {
   // Handle payment when the button is clicked
   const handlePayment = () => {
     if (!paymentData) {
-      alert("Payment data not loaded yet.");
+      showError("Payment data not loaded yet.");
       return;
     }
 
     if (!scriptLoaded) {
-      alert("Razorpay script is not loaded. Please try again later.");
+      showError("Razorpay script is not loaded. Please try again later.");
       return;
     }
 
-    const tripType = localStorage.getItem("tripType") || "oneway";
+    const tripType = localStorage.getItem("bookingType");
     const email = import.meta.env.VITE_DRIVADO_EMAIL;
 
     const selectedVehicle = JSON.parse(
@@ -88,6 +84,10 @@ const PaymentButton: React.FC = () => {
     );
     const passengerDetails = JSON.parse(
       localStorage.getItem("passengerDetails") || "{}",
+    );
+
+    const bookingSearchForm = JSON.parse(
+      localStorage.getItem("bookingSearchForm") || "{}",
     );
     const validatedData = JSON.parse(
       localStorage.getItem("validatedData") || "{}",
@@ -113,7 +113,7 @@ const PaymentButton: React.FC = () => {
         email: passengerDetails.email || "",
         phone: passengerDetails.contactNumber || "",
         country: passengerDetails.country || "India",
-        dial_code: passengerDetails.dial_code || "", // Corrected to passengerDetails
+        dial_code: bookingSearchForm.currency.value || "",
         flightOrTrain: passengerDetails.flightNumber || "N/A",
         reference: passengerDetails.referenceNumber || "N/A",
         specialRequest: passengerDetails.splRequest || "",
@@ -127,7 +127,7 @@ const PaymentButton: React.FC = () => {
       order_id: paymentData.id,
       name: `${passengerDetails.salutation || ""} ${passengerDetails.firstName || ""} ${passengerDetails.lastName || ""}`,
       description: "A global chauffeur service",
-      handler: async function (response: any) {
+      handler: async function () {
         try {
           const bookingRes = await fetch(bookingEndpoint, {
             method: "POST",
@@ -138,16 +138,30 @@ const PaymentButton: React.FC = () => {
             body: JSON.stringify(payload),
           });
 
+          if (!bookingRes.ok) {
+            const errorText = await bookingRes.text();
+            showError(`Booking failed: ${errorText}`);
+            throw new Error(errorText); // Throw an error to stop further execution
+          }
+
           const bookingData = await bookingRes.json();
           console.log("Booking Response:", bookingData);
 
-          // Reset after booking
-          setPaymentData(null);
-          setLoading(true);
-          fetchOrder();
-          navigate("/booking-confirmation"); // Redirect to the confirmation page
-        } catch (err) {
+          // Clear all localStorage after booking success
+          clearSession();
+
+          // Navigate to confirmation
+          navigate("/booking-confirmation");
+        } catch (err: unknown) {
           console.error("Booking API call failed:", err);
+
+          // Type guard to check if 'err' is an instance of Error
+          if (err instanceof Error) {
+            showError(`An error occurred: ${err.message || "Unknown error"}`);
+          } else {
+            // If it's not an instance of 'Error', treat it as an unknown error
+            showError("An unknown error occurred");
+          }
         }
       },
       prefill: {
@@ -155,9 +169,9 @@ const PaymentButton: React.FC = () => {
         email: passengerDetails.email || "",
         contact: passengerDetails.contactNumber || "",
       },
-      notes: {
-        address: "Passenger address or notes",
-      },
+      // notes: {
+      //   address: "Passenger address or notes",
+      // },
       theme: {
         color: "#FB4156",
       },
@@ -170,7 +184,24 @@ const PaymentButton: React.FC = () => {
     };
 
     const razorpay = new (window as any).Razorpay(options);
-    razorpay.open(); // Open the Razorpay modal
+    razorpay.open();
+  };
+
+  const showError = (message: string) => {
+    setErrorMessage(message);
+    setShowPopup(true);
+  };
+
+  const closePopup = () => {
+    setShowPopup(false);
+  };
+
+  const clearSession = () => {
+    localStorage.clear();
+    setPaymentData(null);
+    setLoading(true);
+    setErrorMessage(null);
+    setShowPopup(false);
   };
 
   return (
@@ -178,11 +209,15 @@ const PaymentButton: React.FC = () => {
       <RazorpayScriptLoader onScriptLoad={setScriptLoaded} />
       <button
         onClick={handlePayment}
-        disabled={loading || !paymentData || !scriptLoaded} // Disable if loading, paymentData or script is not loaded
+        disabled={loading || !paymentData || !scriptLoaded}
         className="w-full items-center justify-center rounded-[11px] bg-[var(--brand-theme-color)] px-4 py-[15px] text-xs font-medium text-white hover:bg-[var(--brand-theme-color)] xl:text-base"
       >
         {loading ? "Preparing Payment..." : "Confirm & Pay"}
       </button>
+
+      {showPopup && errorMessage && (
+        <Popup message={errorMessage} onClose={closePopup} />
+      )}
     </>
   );
 };
